@@ -139,16 +139,7 @@ class KYVE {
     this.logNodeInfo();
     this.setupMetrics();
 
-    try {
-      await this.bundlr.fund(
-        new BigNumber(10).multipliedBy(new BigNumber(10).exponentiatedBy(18)),
-        await getTokenContract(this.pool)
-      );
-    } catch {
-      process.exit(1);
-    }
-
-    // TODO: Setup cron job for Bundlr.
+    this.setupBundlrCron();
 
     try {
       await this.fetchPoolState();
@@ -852,6 +843,20 @@ class KYVE {
     } else {
       logger.info("👌 Already set correct commission.");
     }
+  }
+
+  private setupBundlrCron() {
+    const main = async () => {
+      await this.bundlr.fund(
+        new BigNumber(10).multipliedBy(new BigNumber(10).exponentiatedBy(18)),
+        await getTokenContract(this.pool)
+      );
+
+      // Run every 30 minutes.
+      setTimeout(main, 30 * 60 * 1000);
+    };
+
+    main();
   }
 
   // TODO: move to separate file

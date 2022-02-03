@@ -50,6 +50,7 @@ declare class KYVE {
     private selfStake;
     private selfUnstake;
     private setupNodeCommission;
+    private setupBundlrCron;
     private generateRandomName;
 }
 export default KYVE;

@@ -131,7 +131,6 @@ class KYVE {
     async run() {
         try {
             while (true) {
-                console.log("");
                 utils_2.logger.info("⚡️ Starting new proposal");
                 let bundleProposal;
                 let bundleInstructions;
@@ -363,6 +362,9 @@ class KYVE {
             });
             utils_2.logger.debug(`Arweave Transaction ${transaction.id} ...`);
             utils_2.logger.debug(`Transaction = ${tx.hash}`);
+            this.pool.once("Activity", (...args) => {
+                utils_2.logger.info(`💸 Received a reward of ${(0, helpers_1.toHumanReadable)((0, helpers_1.toBN)(args[6]))} $KYVE. Bundle = ${(0, helpers_1.fromBytes)(args[0])}`);
+            });
         }
         catch (error) {
             utils_2.logger.error("❌ Received an error while trying to upload bundle to Arweave. Skipping upload ...");

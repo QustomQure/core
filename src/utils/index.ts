@@ -30,10 +30,6 @@ export class CLI extends Command {
       "Your Ethereum private key that holds $KYVE."
     );
     this.option(
-      "-k, --keyfile <string>",
-      "The path to your Arweave keyfile. [optional]"
-    );
-    this.option(
       "-n, --name <string>",
       "The identifier name of the node. [optional, default = random]"
     );

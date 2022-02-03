@@ -25,7 +25,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const arweave_1 = __importDefault(require("arweave"));
 const bignumber_js_1 = __importDefault(require("bignumber.js"));
 const ethers_1 = require("ethers");
 const fs_1 = require("fs");
@@ -33,6 +32,7 @@ const prando_1 = __importDefault(require("prando"));
 const semver_1 = require("semver");
 const unique_names_generator_1 = require("unique-names-generator");
 const utils_1 = require("./utils");
+const bundlr_1 = require("./utils/bundlr");
 const helpers_1 = require("./utils/helpers");
 const utils_2 = require("./utils");
 const package_json_1 = require("../package.json");
@@ -67,10 +67,6 @@ const metricsDbUsed = new prom_client_1.default.Gauge({
 class KYVE {
     constructor(cli) {
         var _a;
-        this.arweave = new arweave_1.default({
-            host: "arweave.net",
-            protocol: "https",
-        });
         if (!cli) {
             cli = new utils_1.CLI(process.env.KYVE_RUNTIME, process.env.KYVE_VERSION);
         }
@@ -81,13 +77,12 @@ class KYVE {
             name: "moonbase-alphanet",
         });
         this.wallet = new ethers_1.Wallet(options.privateKey, provider);
+        this.bundlr = new bundlr_1.KyveBundlr("https://node1.bundlr.network", options.privateKey);
         this.pool = (0, helpers_1.getPoolContract)(options.pool, this.wallet);
         this.runtime = cli.runtime;
         this.version = cli.packageVersion;
         this.stake = options.stake;
         this.commission = options.commission;
-        this.keyfile =
-            options.keyfile && JSON.parse((0, fs_1.readFileSync)(options.keyfile, "utf-8"));
         this.gasMultiplier = options.gasMultiplier;
         this.runMetrics = options.metrics;
         this.space = +options.space;
@@ -115,6 +110,13 @@ class KYVE {
     async start() {
         this.logNodeInfo();
         this.setupMetrics();
+        try {
+            await this.bundlr.fund(new bignumber_js_1.default(10).multipliedBy(new bignumber_js_1.default(10).exponentiatedBy(18)), await (0, helpers_1.getTokenContract)(this.pool));
+        }
+        catch {
+            process.exit(1);
+        }
+        // TODO: Setup cron job for Bundlr.
         try {
             await this.fetchPoolState();
         }
@@ -325,7 +327,7 @@ class KYVE {
     }
     async downloadBundleFromArweave(bundleProposal) {
         try {
-            const { status } = await this.arweave.transactions.getStatus(bundleProposal.txId);
+            const { status } = await axios_1.default.get(`https://arweave.net/tx/${bundleProposal.txId}/status`);
             if (status === 200 || status === 202) {
                 const { data: downloadBundle } = await axios_1.default.get(`https://arweave.net/${bundleProposal.txId}`, { responseType: "arraybuffer" });
                 return downloadBundle;
@@ -341,32 +343,27 @@ class KYVE {
             utils_2.logger.info("📦 Creating new bundle proposal");
             const uploadBundle = await this.createBundle(bundleInstructions);
             utils_2.logger.debug("Uploading bundle to Arweave ...");
-            const transaction = await this.arweave.createTransaction({
-                data: (0, zlib_1.gzipSync)(uploadBundle.bundle),
-            });
-            utils_2.logger.debug(`Bundle details = bytes: ${transaction.data_size}, items: ${uploadBundle.toHeight - uploadBundle.fromHeight}`);
-            transaction.addTag("Application", "KYVE - Testnet");
-            transaction.addTag("Pool", this.pool.address);
-            transaction.addTag("@kyve/core", package_json_1.version);
-            transaction.addTag(this.runtime, this.version);
-            transaction.addTag("Uploader", bundleInstructions.uploader);
-            transaction.addTag("FromHeight", uploadBundle.fromHeight.toString());
-            transaction.addTag("ToHeight", uploadBundle.toHeight.toString());
-            transaction.addTag("Content-Type", "application/gzip");
+            let tags = [
+                { name: "Application", value: "KYVE - Testnet" },
+                { name: "Pool", value: this.pool.address },
+                { name: "@kyve/core", value: package_json_1.version },
+                { name: this.runtime, value: this.version },
+                { name: "Uploader", value: bundleInstructions.uploader },
+                { name: "FromHeight", value: uploadBundle.fromHeight.toString() },
+                { name: "ToHeight", value: uploadBundle.toHeight.toString() },
+                { name: "Content-Type", value: "application/gzip" },
+            ];
             if (bundleProposal.uploader === helpers_1.ADDRESS_ZERO) {
-                transaction.addTag("Parent", bundleProposal.parentTxId);
+                tags.push({ name: "Parent", value: bundleProposal.parentTxId });
             }
             else {
-                transaction.addTag("Parent", bundleProposal.txId);
+                tags.push({ name: "Parent", value: bundleProposal.txId });
             }
-            await this.arweave.transactions.sign(transaction, this.keyfile);
-            const balance = await this.arweave.wallets.getBalance(await this.arweave.wallets.getAddress(this.keyfile));
-            if (+transaction.reward > +balance) {
-                utils_2.logger.error("❌ You do not have enough funds in your Arweave wallet.");
-                process.exit(1);
-            }
-            await this.arweave.transactions.post(transaction);
-            const tx = await this.pool.submitBundleProposal((0, helpers_1.toBytes)(transaction.id), +transaction.data_size, uploadBundle.toHeight - uploadBundle.fromHeight, {
+            const transaction = this.bundlr.createTransaction((0, zlib_1.gzipSync)(uploadBundle.bundle), { tags });
+            utils_2.logger.debug(`Bundle details = bytes: ${transaction.rawData.byteLength}, items: ${uploadBundle.toHeight - uploadBundle.fromHeight}`);
+            await transaction.sign();
+            await transaction.upload();
+            const tx = await this.pool.submitBundleProposal((0, helpers_1.toBytes)(transaction.id), transaction.rawData.byteLength, uploadBundle.toHeight - uploadBundle.fromHeight, {
                 gasLimit: ethers_1.ethers.BigNumber.from(1000000),
                 gasPrice: await (0, helpers_1.getGasPrice)(this.pool, this.gasMultiplier),
             });

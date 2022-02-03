@@ -16,7 +16,6 @@ class CLI extends commander_1.Command {
         this.requiredOption("-s, --stake <number>", "The amount of tokens you want to stake.");
         this.requiredOption("-c, --commission <number>", "The commission rate of your node.");
         this.requiredOption("-pk, --private-key <string>", "Your Ethereum private key that holds $KYVE.");
-        this.option("-k, --keyfile <string>", "The path to your Arweave keyfile. [optional]");
         this.option("-n, --name <string>", "The identifier name of the node. [optional, default = random]");
         this.option("-e, --endpoint <string>", "A custom Moonbase Alpha endpoint. [optional]");
         this.option("-sp, --space <number>", "The size of disk space in bytes the node is allowed to use. [optional, default = 1000000000 (1 GB)]", "1000000000");

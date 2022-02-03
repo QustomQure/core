@@ -1,8 +1,6 @@
-import Arweave from "arweave";
-import { JWKInterface } from "arweave/node/lib/wallet";
 import BigNumber from "bignumber.js";
 import { Contract, ContractTransaction, ethers, Wallet } from "ethers";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync } from "fs";
 import Prando from "prando";
 import { satisfies } from "semver";
 import { ILogObject } from "tslog";
@@ -14,6 +12,7 @@ import {
 } from "unique-names-generator";
 import { Bundle, BundleInstructions, BundleProposal } from "./faces";
 import { CLI } from "./utils";
+import { KyveBundlr } from "./utils/bundlr";
 import {
   getGasPrice,
   toBN,
@@ -28,14 +27,13 @@ import {
 } from "./utils/helpers";
 import { logger } from "./utils";
 import { version } from "../package.json";
-import Transaction from "arweave/node/lib/transaction";
 import hash from "object-hash";
 import http from "http";
 import url from "url";
 import client, { register } from "prom-client";
 import { Database } from "./utils/database";
 import du from "du";
-import { gunzipSync, gzipSync } from "zlib";
+import { gzipSync } from "zlib";
 import axios from "axios";
 
 export * from "./utils";
@@ -70,17 +68,13 @@ class KYVE {
   protected stake: string;
   protected commission: string;
   protected wallet: Wallet;
-  protected keyfile: JWKInterface;
   protected name: string;
   protected gasMultiplier: string;
   protected poolState: any;
   protected runMetrics: boolean;
   protected space: number;
   protected db: Database;
-  protected arweave = new Arweave({
-    host: "arweave.net",
-    protocol: "https",
-  });
+  protected bundlr: KyveBundlr;
 
   public static metrics = client;
 
@@ -101,14 +95,16 @@ class KYVE {
     );
 
     this.wallet = new Wallet(options.privateKey, provider);
+    this.bundlr = new KyveBundlr(
+      "https://node1.bundlr.network",
+      options.privateKey
+    );
 
     this.pool = getPoolContract(options.pool, this.wallet);
     this.runtime = cli.runtime;
     this.version = cli.packageVersion;
     this.stake = options.stake;
     this.commission = options.commission;
-    this.keyfile =
-      options.keyfile && JSON.parse(readFileSync(options.keyfile, "utf-8"));
     this.gasMultiplier = options.gasMultiplier;
     this.runMetrics = options.metrics;
     this.space = +options.space;
@@ -142,6 +138,17 @@ class KYVE {
   async start() {
     this.logNodeInfo();
     this.setupMetrics();
+
+    try {
+      await this.bundlr.fund(
+        new BigNumber(10).multipliedBy(new BigNumber(10).exponentiatedBy(18)),
+        await getTokenContract(this.pool)
+      );
+    } catch {
+      process.exit(1);
+    }
+
+    // TODO: Setup cron job for Bundlr.
 
     try {
       await this.fetchPoolState();
@@ -413,8 +420,8 @@ class KYVE {
     bundleProposal: BundleProposal
   ): Promise<any> {
     try {
-      const { status } = await this.arweave.transactions.getStatus(
-        bundleProposal.txId
+      const { status } = await axios.get(
+        `https://arweave.net/tx/${bundleProposal.txId}/status`
       );
 
       if (status === 200 || status === 202) {
@@ -442,47 +449,40 @@ class KYVE {
 
       logger.debug("Uploading bundle to Arweave ...");
 
-      const transaction = await this.arweave.createTransaction({
-        data: gzipSync(uploadBundle.bundle),
-      });
+      let tags = [
+        { name: "Application", value: "KYVE - Testnet" },
+        { name: "Pool", value: this.pool.address },
+        { name: "@kyve/core", value: version },
+        { name: this.runtime, value: this.version },
+        { name: "Uploader", value: bundleInstructions.uploader },
+        { name: "FromHeight", value: uploadBundle.fromHeight.toString() },
+        { name: "ToHeight", value: uploadBundle.toHeight.toString() },
+        { name: "Content-Type", value: "application/gzip" },
+      ];
+
+      if (bundleProposal.uploader === ADDRESS_ZERO) {
+        tags.push({ name: "Parent", value: bundleProposal.parentTxId });
+      } else {
+        tags.push({ name: "Parent", value: bundleProposal.txId });
+      }
+
+      const transaction = this.bundlr.createTransaction(
+        gzipSync(uploadBundle.bundle),
+        { tags }
+      );
 
       logger.debug(
-        `Bundle details = bytes: ${transaction.data_size}, items: ${
+        `Bundle details = bytes: ${transaction.rawData.byteLength}, items: ${
           uploadBundle.toHeight - uploadBundle.fromHeight
         }`
       );
 
-      transaction.addTag("Application", "KYVE - Testnet");
-      transaction.addTag("Pool", this.pool.address);
-      transaction.addTag("@kyve/core", version);
-      transaction.addTag(this.runtime, this.version);
-      transaction.addTag("Uploader", bundleInstructions.uploader);
-      transaction.addTag("FromHeight", uploadBundle.fromHeight.toString());
-      transaction.addTag("ToHeight", uploadBundle.toHeight.toString());
-      transaction.addTag("Content-Type", "application/gzip");
-
-      if (bundleProposal.uploader === ADDRESS_ZERO) {
-        transaction.addTag("Parent", bundleProposal.parentTxId);
-      } else {
-        transaction.addTag("Parent", bundleProposal.txId);
-      }
-
-      await this.arweave.transactions.sign(transaction, this.keyfile);
-
-      const balance = await this.arweave.wallets.getBalance(
-        await this.arweave.wallets.getAddress(this.keyfile)
-      );
-
-      if (+transaction.reward > +balance) {
-        logger.error("❌ You do not have enough funds in your Arweave wallet.");
-        process.exit(1);
-      }
-
-      await this.arweave.transactions.post(transaction);
+      await transaction.sign();
+      await transaction.upload();
 
       const tx = await this.pool.submitBundleProposal(
         toBytes(transaction.id),
-        +transaction.data_size,
+        transaction.rawData.byteLength,
         uploadBundle.toHeight - uploadBundle.fromHeight,
         {
           gasLimit: ethers.BigNumber.from(1000000),

@@ -1,9 +1,8 @@
 /// <reference types="node" />
-import Arweave from "arweave";
-import { JWKInterface } from "arweave/node/lib/wallet";
 import { Contract, Wallet } from "ethers";
 import { Bundle, BundleInstructions, BundleProposal } from "./faces";
 import { CLI } from "./utils";
+import { KyveBundlr } from "./utils/bundlr";
 import client from "prom-client";
 import { Database } from "./utils/database";
 export * from "./utils";
@@ -18,14 +17,13 @@ declare class KYVE {
     protected stake: string;
     protected commission: string;
     protected wallet: Wallet;
-    protected keyfile: JWKInterface;
     protected name: string;
     protected gasMultiplier: string;
     protected poolState: any;
     protected runMetrics: boolean;
     protected space: number;
     protected db: Database;
-    protected arweave: Arweave;
+    protected bundlr: KyveBundlr;
     static metrics: typeof client;
     constructor(cli?: CLI);
     start(): Promise<void>;
